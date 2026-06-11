@@ -580,13 +580,13 @@ export const SIM_STORAGE_KEY = "aindra-current-session";
 export const REPORTS_STORAGE_KEY = "aindra-daily-reports";
 export const LOCAL_RESET_STORAGE_KEY = "aindra-local-reset-version";
 export const LOCAL_RESET_VERSION = "2026-06-09-clean-50k-v1";
-export const SAFE_CONFIG_VERSION = "4";
+export const SAFE_CONFIG_VERSION = "5";
 export const PROFIT_MILESTONE_PCTS = [0.25, 0.5, 0.75, 1];
 
 export const defaultConfig: Config = {
   capital: 50000,
-  targetPct: 1,
-  maxLossPct: 0.5,
+  targetPct: 0.75,
+  maxLossPct: 0.75,
   maxTrades: 2,
   slippageBps: 8,
   minScore: 70,

@@ -76,10 +76,17 @@ function atr(candles, period = 14) {
   return ranges.reduce((total, item) => total + item, 0) / ranges.length;
 }
 
-function volumePulse(candles) {
-  const latest = candles.at(-1)?.volume ?? 0;
-  const average =
-    candles.slice(-20).reduce((total, candle) => total + candle.volume, 0) / Math.max(1, Math.min(20, candles.length));
+// Volume pulse compares recent activity against the prior baseline. The
+// newest candle may still be forming live (partial volume), so take the
+// larger of the last two candles and baseline against the 20 candles before
+// them — the baseline never includes the candles being measured.
+export function volumePulse(candles) {
+  if (candles.length < 3) {
+    return 0;
+  }
+  const latest = Math.max(candles.at(-1)?.volume ?? 0, candles.at(-2)?.volume ?? 0);
+  const prior = candles.slice(-22, -2);
+  const average = prior.length ? prior.reduce((total, candle) => total + candle.volume, 0) / prior.length : 0;
   return average ? latest / average : 0;
 }
 
@@ -251,9 +258,11 @@ function strategyScores({ quote, candles, intradayCandles, momentumPct, dayMomen
   const closeValues = candles.slice(-20).map((candle) => candle.close);
   const bands = bollinger(candles);
   const signalRsi = rsi(candles);
-  // Opening range must be today's first candles. With no session candles yet,
-  // range stays {0,0} and the opening-range strategies simply score zero on
-  // the breakout factor instead of comparing against a stale multi-day open.
+  // Opening range must be today's first candles, and classic ORB only trades
+  // once the range is COMPLETE (6 x 5min candles = 09:15-09:45). Before that
+  // a "breakout" is just noise against a 1-2 candle range, so the
+  // opening-range candidates score zero until the range has formed.
+  const rangeComplete = (intradayCandles?.length ?? 0) >= 6;
   const range = openingRange(intradayCandles ?? []);
   const bandWidth = bands.upper - bands.lower;
   const lowerBandDistance = bandWidth ? ((quote.ltp - bands.lower) / bandWidth) * 100 : 50;
@@ -308,14 +317,17 @@ function strategyScores({ quote, candles, intradayCandles, momentumPct, dayMomen
     mode: "opening-range",
     label: "Opening Range",
     side: "BUY",
-    score:
-      clamp(breakout * 42, 0, 30) +
-      clamp(relativeStrengthPct * 16, 0, 18) +
-      clamp((pulse - 1) * 18, 0, 22) +
-      clamp(dayMomentumPct * 10, 0, 18) +
-      bullishRegime +
-      (quote.ltp > sma(closeValues) ? 8 : 0),
-    setup: `range breakout ${breakout.toFixed(2)}%, volume ${pulse.toFixed(2)}x`,
+    score: rangeComplete
+      ? clamp(breakout * 42, 0, 30) +
+        clamp(relativeStrengthPct * 16, 0, 18) +
+        clamp((pulse - 1) * 18, 0, 22) +
+        clamp(dayMomentumPct * 10, 0, 18) +
+        bullishRegime +
+        (quote.ltp > sma(closeValues) ? 8 : 0)
+      : 0,
+    setup: rangeComplete
+      ? `range breakout ${breakout.toFixed(2)}%, volume ${pulse.toFixed(2)}x`
+      : "opening range still forming",
   };
 
   const shortMomentum = {
@@ -363,14 +375,17 @@ function strategyScores({ quote, candles, intradayCandles, momentumPct, dayMomen
     mode: "opening-range",
     label: "Opening Breakdown",
     side: "SELL",
-    score:
-      clamp(breakdown * 42, 0, 30) +
-      clamp(-relativeStrengthPct * 16, 0, 18) +
-      clamp((pulse - 1) * 18, 0, 22) +
-      clamp(-dayMomentumPct * 10, 0, 18) +
-      bearishRegime +
-      (quote.ltp < sma(closeValues) ? 8 : 0),
-    setup: `range breakdown ${breakdown.toFixed(2)}%, volume ${pulse.toFixed(2)}x`,
+    score: rangeComplete
+      ? clamp(breakdown * 42, 0, 30) +
+        clamp(-relativeStrengthPct * 16, 0, 18) +
+        clamp((pulse - 1) * 18, 0, 22) +
+        clamp(-dayMomentumPct * 10, 0, 18) +
+        bearishRegime +
+        (quote.ltp < sma(closeValues) ? 8 : 0)
+      : 0,
+    setup: rangeComplete
+      ? `range breakdown ${breakdown.toFixed(2)}%, volume ${pulse.toFixed(2)}x`
+      : "opening range still forming",
   };
 
   return [momentum, meanReversion, vwapPullback, openingBreakout, shortMomentum, shortMeanReversion, shortVwapPullback, openingBreakdown].map((strategy) => ({
@@ -461,7 +476,7 @@ export function generateSignals({ quotes, candlesBySymbol, config, asOf = new Da
   const niftyCandles = candlesBySymbol["NIFTY 50"] ?? [];
   const marketRegime = detectMarketRegime({ niftyBias, niftyCandles, asOf, vix, breadth });
   const sectorStrength = computeSectorStrength(quotes, niftyBias);
-  const sectorRankBySector = new Map(sectorStrength.map((item) => [item.sector, item.rank]));
+  const sectorInfoBySector = new Map(sectorStrength.map((item) => [item.sector, item]));
   const sectorCount = sectorStrength.length;
   const tradableQuotes = quotes.filter((quote) => quote.sector !== "Index");
   const minRelativeStrengthPct = safeNumber(config.minRelativeStrengthPct, 0.05);
@@ -501,10 +516,13 @@ export function generateSignals({ quotes, candlesBySymbol, config, asOf = new Da
       const volatilityScore = signalAtr && quote.ltp ? clamp(10 - (signalAtr / quote.ltp) * 700, 0, 10) : 5;
       const regimePass = regimeSupportsSignal(marketRegime, side, selectedStrategy.mode);
       const regimeScore = regimePass ? 10 : marketRegime.bias === "neutral" ? 6 : 0;
-      const sectorRank = sectorRankBySector.get(quote.sector) ?? 0;
+      const sectorInfo = sectorInfoBySector.get(quote.sector);
+      const sectorRank = sectorInfo?.rank ?? 0;
       const strongSectorCutoff = Math.ceil(sectorCount / 3);
+      // Sector bonus requires at least 2 members — a single-stock "sector"
+      // would just be the stock confirming its own momentum.
       const sectorScore =
-        sectorCount > 1 && sectorRank
+        sectorCount > 1 && sectorRank && (sectorInfo?.members ?? 0) >= 2
           ? side === "BUY" && sectorRank <= strongSectorCutoff
             ? 5
             : side === "SELL" && sectorRank > sectorCount - strongSectorCutoff
@@ -537,6 +555,8 @@ export function generateSignals({ quotes, candlesBySymbol, config, asOf = new Da
       const gapPct = quote.close && quote.open ? ((quote.open - quote.close) / quote.close) * 100 : 0;
       const gapSensitive = selectedStrategy.mode === "momentum" || selectedStrategy.mode === "opening-range";
       const gapPass = !gapSensitive || !inGapWindow || Math.abs(gapPct) <= maxGapPct;
+      // ORB needs the full 09:15-09:45 range before a breakout means anything.
+      const orbPass = selectedStrategy.mode !== "opening-range" || intradayCandles.length >= 6;
       const eligible =
         score >= config.minScore &&
         (selectedStrategy.mode === "mean-reversion" || directionalMomentumPass) &&
@@ -545,6 +565,7 @@ export function generateSignals({ quotes, candlesBySymbol, config, asOf = new Da
         chargeAdjustedPass &&
         vixPass &&
         gapPass &&
+        orbPass &&
         spreadBps <= config.maxSpreadBps &&
         quote.ltp <= config.capital * 0.98 &&
         sizing.quantity > 0;
@@ -557,6 +578,7 @@ export function generateSignals({ quotes, candlesBySymbol, config, asOf = new Da
       if (!chargeAdjustedPass) gateReasons.push(`net R:R ${netRewardRisk.toFixed(2)}`);
       if (!vixPass) gateReasons.push(`VIX ${vix.toFixed(1)} > ${maxVix}`);
       if (!gapPass) gateReasons.push(`gap-open ${gapPct.toFixed(1)}%`);
+      if (!orbPass) gateReasons.push(`opening range forming (${intradayCandles.length}/6 candles)`);
       if (spreadBps > config.maxSpreadBps) gateReasons.push(`spread ${spreadBps.toFixed(1)} bps`);
       if (quote.ltp > config.capital * 0.98) gateReasons.push("price above capital cap");
       if (sizing.quantity <= 0) gateReasons.push("size below 1 share");
@@ -644,7 +666,6 @@ export function agentDecision(signals, config) {
         : `Best signal ${top.symbol} scored ${top.score}, below active gates`,
     };
   }
-  const maxPositionValue = config.capital * 0.96;
   const side = top.side ?? "BUY";
   const sizing = sizePosition({ price: top.price, atrValue: top.atr, config, side, strategyMode: top.strategy });
   if (sizing.quantity <= 0) {
@@ -660,7 +681,8 @@ export function agentDecision(signals, config) {
     action: "TRADE",
     symbol: top.symbol,
     side,
-    quantity: Math.min(sizing.quantity, Math.max(1, Math.floor(maxPositionValue / top.price))),
+    // sizePosition already caps quantity at 96% of capital — no second cap.
+    quantity: sizing.quantity,
     stopLossPrice: sizing.stopLossPrice,
     targetPrice: sizing.targetPrice,
     riskAmount: sizing.positionRisk,

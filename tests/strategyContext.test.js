@@ -1,7 +1,18 @@
 import { ok, strictEqual } from "node:assert";
 import { test } from "node:test";
 import { applyTick, defaultEngineConfig } from "../server/botEngine.js";
-import { computeMarketContext, computeSectorStrength, generateSignals, sizePosition, strategyProfile } from "../server/strategy.js";
+import {
+  computeMarketContext,
+  computeSectorStrength,
+  generateSignals,
+  sizePosition,
+  strategyProfile,
+  volumePulse,
+} from "../server/strategy.js";
+
+function todayIst() {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date());
+}
 
 function quote(symbol, sector, ltp, close, overrides = {}) {
   return {
@@ -113,6 +124,71 @@ test("RS ranking assigns rank and percentile across the universe", () => {
   strictEqual(infy.rsRank, 1);
   strictEqual(sbin.rsRank, 3);
   ok(infy.rsPercentile > sbin.rsPercentile);
+});
+
+test("volumePulse ignores the partial in-progress candle", () => {
+  const baseline = Array.from({ length: 20 }, (_, index) => ({ volume: 10000, time: `c${index}` }));
+  // Spike on the last closed candle, tiny partial volume on the forming one.
+  const spikeThenPartial = [...baseline, { volume: 40000 }, { volume: 500 }];
+  ok(volumePulse(spikeThenPartial) >= 3.9, "spike on closed candle must register despite tiny forming candle");
+  // No spike anywhere: pulse near 1.
+  const flat = [...baseline, { volume: 10000 }, { volume: 10000 }];
+  ok(Math.abs(volumePulse(flat) - 1) < 0.05);
+  strictEqual(volumePulse([{ volume: 100 }]), 0);
+});
+
+test("opening-range strategy is gated until the range completes", () => {
+  const today = todayIst();
+  const fewCandles = Array.from({ length: 3 }, (_, index) => ({
+    time: `${today}T09:${String(15 + index * 5).padStart(2, "0")}:00+05:30`,
+    open: 1500,
+    high: 1505,
+    low: 1495,
+    close: 1502 + index,
+    volume: 50000,
+  }));
+  const signals = generateSignals({
+    quotes: [
+      quote("NIFTY 50", "Index", 23100, 23000),
+      quote("INFY", "IT Services", 1530, 1500),
+    ],
+    candlesBySymbol: { INFY: fewCandles },
+    config: {
+      ...defaultEngineConfig,
+      strategyMode: "opening-range",
+      minScore: 1,
+      minMomentumPct: 0,
+      minRelativeStrengthPct: -100,
+      minNetRewardRisk: -5,
+      maxGapPct: 99,
+    },
+    asOf: `${today}T09:30:00+05:30`,
+  });
+  const infy = signals.find((signal) => signal.symbol === "INFY");
+  strictEqual(infy.eligible, false);
+  ok(
+    infy.gateReasons.some((reason) => reason.startsWith("opening range forming")),
+    infy.gateReasons.join(", ")
+  );
+  strictEqual(infy.strategyScore, 0, "ORB candidates must score zero before the range completes");
+});
+
+test("single-stock sectors do not get the sector-strength bonus", () => {
+  const baseQuotes = [
+    quote("NIFTY 50", "Index", 23000, 23000),
+    quote("BHARTIARTL", "Telecom", 1515, 1500),
+    quote("INFY", "IT Services", 3900, 3900),
+    quote("TCS", "IT Services", 3900, 3900),
+  ];
+  const soloRun = generateSignals({ quotes: baseQuotes, candlesBySymbol: {}, config: defaultEngineConfig });
+  // Same setup, but Telecom now has a flat second member -> bonus applies.
+  const pairedQuotes = baseQuotes.map((item) =>
+    item.symbol === "INFY" ? { ...item, sector: "Telecom" } : item
+  );
+  const pairedRun = generateSignals({ quotes: pairedQuotes, candlesBySymbol: {}, config: defaultEngineConfig });
+  const soloScore = soloRun.find((signal) => signal.symbol === "BHARTIARTL").score;
+  const pairedScore = pairedRun.find((signal) => signal.symbol === "BHARTIARTL").score;
+  strictEqual(pairedScore - soloScore, 5, `expected exactly the +5 sector bonus, got ${pairedScore - soloScore}`);
 });
 
 // --- live engine trade management ---
