@@ -1,8 +1,30 @@
 import { readEvents } from "./database.js";
 import { tradeHistory } from "./orders.js";
+import { allDayStats, closedPositions } from "./positionsStore.js";
+
+const MILESTONE_PCTS = [0.25, 0.5, 0.75, 1];
 
 function pct(value, total) {
   return total ? (value / total) * 100 : 0;
+}
+
+function istHourLabel(value) {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Kolkata",
+    hour: "2-digit",
+    hour12: false,
+  }).formatToParts(new Date(value));
+  const hour = parts.find((part) => part.type === "hour")?.value ?? "??";
+  return `${hour}:00`;
+}
+
+function bucketLabel(value, edges, format = (edge) => String(edge)) {
+  for (let index = 0; index < edges.length; index += 1) {
+    if (value < edges[index]) {
+      return index === 0 ? `< ${format(edges[0])}` : `${format(edges[index - 1])}-${format(edges[index])}`;
+    }
+  }
+  return `>= ${format(edges[edges.length - 1])}`;
 }
 
 function average(total, count) {
@@ -175,6 +197,107 @@ function summarizeRegimes(snapshots) {
     .sort((a, b) => b.snapshots - a.snapshots);
 }
 
+// Joins each closed trade to the market regime logged nearest (at or before)
+// its entry, so outcomes can be sliced by the regime the bot traded in.
+function regimeAtEntry(trade, snapshots) {
+  const entryTime = new Date(trade.entryAt).getTime();
+  let best = null;
+  for (const snapshot of snapshots) {
+    const time = new Date(snapshot.createdAt).getTime();
+    if (time <= entryTime && (!best || time > best.time)) {
+      best = { time, label: snapshot.marketRegime?.label ?? snapshot.signals?.[0]?.marketRegime?.label ?? "unknown" };
+    }
+  }
+  return best?.label ?? "unknown";
+}
+
+/**
+ * Trade-quality payload built from the bot engine's durable positions:
+ * MFE/MAE, time in trade, exit-reason distribution, R-multiples, capture
+ * ratio, plus day-level peak/give-back and profit-milestone frequency.
+ */
+export function tradeQuality({ capital = 50000, limit = 200 } = {}) {
+  const positions = closedPositions(limit);
+  const trades = positions.map((position) => {
+    const timeInTradeMin =
+      position.exitAt && position.entryAt
+        ? Math.max(0, (new Date(position.exitAt).getTime() - new Date(position.entryAt).getTime()) / 60000)
+        : 0;
+    const mfeAmount = (position.mfe ?? 0) * position.quantity;
+    const maeAmount = (position.mae ?? 0) * position.quantity;
+    const riskAmount = position.stopLoss
+      ? Math.abs(position.entryPrice - position.stopLoss) * position.quantity
+      : 0;
+    return {
+      id: position.id,
+      tradeDate: position.tradeDate,
+      symbol: position.symbol,
+      side: position.side,
+      strategy: position.strategy,
+      quantity: position.quantity,
+      entryAt: position.entryAt,
+      exitAt: position.exitAt,
+      timeInTradeMin,
+      exitReason: position.exitReason ?? "unknown",
+      netPnl: position.netPnl ?? 0,
+      grossPnl: position.grossPnl ?? 0,
+      charges: position.charges ?? 0,
+      mfeAmount,
+      maeAmount,
+      rMultiple: riskAmount ? (position.netPnl ?? 0) / riskAmount : 0,
+      captureRatio: mfeAmount > 0 ? (position.netPnl ?? 0) / mfeAmount : 0,
+    };
+  });
+
+  const closed = trades.length;
+  const sum = (selector) => trades.reduce((total, trade) => total + selector(trade), 0);
+  const exitReasons = new Map();
+  for (const trade of trades) {
+    const bucket = exitReasons.get(trade.exitReason) ?? { reason: trade.exitReason, trades: 0, netPnl: 0 };
+    bucket.trades += 1;
+    bucket.netPnl += trade.netPnl;
+    exitReasons.set(trade.exitReason, bucket);
+  }
+
+  const dayStats = allDayStats();
+  const milestoneFrequency = MILESTONE_PCTS.map((milestonePct) => {
+    const amount = (capital * milestonePct) / 100;
+    const daysHit = dayStats.filter((day) => day.peakPnl >= amount).length;
+    const daysHeld = dayStats.filter((day) => day.peakPnl >= amount && day.lastPnl >= amount).length;
+    return {
+      pct: milestonePct,
+      amount,
+      daysHit,
+      daysHeld,
+      hitRate: pct(daysHit, dayStats.length),
+      holdRate: pct(daysHeld, daysHit),
+    };
+  });
+
+  const totalGross = sum((trade) => Math.abs(trade.grossPnl));
+  return {
+    generatedAt: new Date().toISOString(),
+    capital,
+    totals: {
+      closedTrades: closed,
+      netPnl: sum((trade) => trade.netPnl),
+      avgTimeInTradeMin: closed ? sum((trade) => trade.timeInTradeMin) / closed : 0,
+      avgMfeAmount: closed ? sum((trade) => trade.mfeAmount) / closed : 0,
+      avgMaeAmount: closed ? sum((trade) => trade.maeAmount) / closed : 0,
+      avgRMultiple: closed ? sum((trade) => trade.rMultiple) / closed : 0,
+      avgCaptureRatio: closed ? sum((trade) => trade.captureRatio) / closed : 0,
+      chargesPctOfGross: totalGross ? (sum((trade) => trade.charges) / totalGross) * 100 : 0,
+    },
+    exitReasons: [...exitReasons.values()].sort((a, b) => b.trades - a.trades),
+    milestoneFrequency,
+    dayStats: dayStats.slice(0, 30).map((day) => ({
+      ...day,
+      gaveBack: Math.max(0, day.peakPnl - day.lastPnl),
+    })),
+    trades: trades.slice(0, 50),
+  };
+}
+
 export function performanceAnalytics({ capital = 50000, limit = 50000 } = {}) {
   const history = tradeHistory({ capital, limit });
   const closedTrades = history.trades.filter((trade) => trade.status === "CLOSED");
@@ -205,12 +328,21 @@ export function performanceAnalytics({ capital = 50000, limit = 50000 } = {}) {
       byStrategy: groupTrades(closedTrades, (trade) => trade.strategy),
       bySymbol: groupTrades(closedTrades, (trade) => trade.symbol),
       bySide: groupTrades(closedTrades, (trade) => trade.side),
+      byHour: groupTrades(closedTrades, (trade) => istHourLabel(trade.entryAt)),
+      byEntryRegime: groupTrades(closedTrades, (trade) => regimeAtEntry(trade, snapshots)),
     },
     signalQuality: {
       byStrategy: groupSignals(snapshots, (signal) => signal.strategy),
       bySymbol: groupSignals(snapshots, (signal) => signal.symbol),
       bySide: groupSignals(snapshots, (signal) => signal.side),
       byRegime: summarizeRegimes(snapshots),
+      byScoreBucket: groupSignals(snapshots, (signal) => bucketLabel(Number(signal.score ?? 0), [60, 70, 80, 90])),
+      bySpreadBucket: groupSignals(snapshots, (signal) =>
+        bucketLabel(Number(signal.spreadBps ?? 999), [6, 12, 18, 24], (edge) => `${edge}bps`)
+      ),
+      byRelativeStrengthBucket: groupSignals(snapshots, (signal) =>
+        bucketLabel(Number(signal.relativeStrengthPct ?? 0), [-0.5, 0, 0.25, 0.75], (edge) => `${edge}%`)
+      ),
       recent: topRecentSignals(snapshots),
     },
   };

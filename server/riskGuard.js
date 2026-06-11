@@ -1,59 +1,8 @@
 import { appendEvent, readJson, saveJson } from "./database.js";
+import { dailyActivity } from "./ledger.js";
 import { getMarketSession } from "./marketCalendar.js";
 
-const riskStateName = "risk-state.json";
-
-function defaultRiskState(tradeDate = getMarketSession().date, overrides = {}) {
-  return {
-    killSwitchActive: false,
-    dayPnl: 0,
-    tradesTaken: 0,
-    tradeDate,
-    updatedAt: new Date().toISOString(),
-    ...overrides,
-  };
-}
-
-function dateKeyInIndia(value) {
-  const date = value ? new Date(value) : new Date();
-  if (Number.isNaN(date.getTime())) {
-    return getMarketSession().date;
-  }
-  const parts = new Intl.DateTimeFormat("en-GB", {
-    timeZone: "Asia/Kolkata",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(date);
-  const lookup = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return `${lookup.year}-${lookup.month}-${lookup.day}`;
-}
-
-function loadRiskState() {
-  const stored = readJson(riskStateName, {});
-  const tradeDate = stored.tradeDate ?? (stored.updatedAt ? dateKeyInIndia(stored.updatedAt) : getMarketSession().date);
-  return defaultRiskState(tradeDate, stored);
-}
-
-let riskState = loadRiskState();
-
-function ensureRiskStateForSession() {
-  const session = getMarketSession();
-  if (riskState.tradeDate !== session.date) {
-    const previous = riskState;
-    riskState = defaultRiskState(session.date, {
-      killSwitchActive: previous.killSwitchActive,
-    });
-    saveJson(riskStateName, riskState);
-    appendEvent("risk.daily_reset", {
-      from: previous.tradeDate ?? "unknown",
-      to: session.date,
-      previousDayPnl: previous.dayPnl ?? 0,
-      previousTradesTaken: previous.tradesTaken ?? 0,
-    });
-  }
-  return session;
-}
+const killSwitchName = "kill-switch.json";
 
 function isEntryOrder(order) {
   if (order.intent) {
@@ -62,10 +11,34 @@ function isEntryOrder(order) {
   return order.transactionType === "BUY";
 }
 
+export function killSwitchState() {
+  const stored = readJson(killSwitchName, { active: false, reason: "", updatedAt: null });
+  return Boolean(stored.active);
+}
+
+export function setKillSwitch(active, reason = "manual") {
+  const state = {
+    active: Boolean(active),
+    reason,
+    updatedAt: new Date().toISOString(),
+  };
+  saveJson(killSwitchName, state);
+  appendEvent("risk.kill_switch", { active: state.active, reason });
+  return state;
+}
+
+// Day P&L and trades taken are derived from the immutable order ledger —
+// never from client-supplied numbers. A server restart loses nothing.
 export function getRiskState(config) {
-  const session = ensureRiskStateForSession();
+  const session = getMarketSession();
+  const activity = dailyActivity(session.date, { capital: config.capital });
   return {
-    ...riskState,
+    killSwitchActive: killSwitchState(),
+    dayPnl: activity.realizedPnl,
+    tradesTaken: activity.tradesTaken,
+    openTrades: activity.openTrades,
+    tradeDate: session.date,
+    updatedAt: new Date().toISOString(),
     marketOpen: session.marketOpen,
     freshEntriesAllowed: session.freshEntriesAllowed,
     botArmAllowed: session.botArmAllowed,
@@ -76,6 +49,7 @@ export function getRiskState(config) {
     closedDay: session.closedDay,
     weekend: session.weekend,
     holiday: session.holiday,
+    holidayListStale: session.holidayListStale,
     nextOpenAt: session.nextOpenAt,
     targetAmount: (config.capital * config.targetPct) / 100,
     lossAmount: (config.capital * config.maxLossPct) / 100,
@@ -83,32 +57,33 @@ export function getRiskState(config) {
   };
 }
 
-export function setKillSwitch(active, reason = "manual") {
-  ensureRiskStateForSession();
-  riskState = {
-    ...riskState,
-    killSwitchActive: Boolean(active),
-    updatedAt: new Date().toISOString(),
-  };
-  saveJson(riskStateName, riskState);
-  appendEvent("risk.kill_switch", { active: riskState.killSwitchActive, reason });
-  return riskState;
-}
+/**
+ * Single validator for paper and live orders.
+ * mode: "paper" | "live". Live mode adds token/env checks.
+ * Overrides (session, killSwitchActive, dayPnl, tradesTaken) exist for tests
+ * and for callers that already computed authoritative state this tick.
+ */
+export function validateOrder(
+  order,
+  {
+    config,
+    mode = "paper",
+    tokenReady = false,
+    liveTradingEnabled = false,
+    allowOutsideMarket = false,
+    session = null,
+    killSwitchActive = null,
+    dayPnl = null,
+    tradesTaken = null,
+  }
+) {
+  const activeSession = session ?? getMarketSession();
+  const activity =
+    dayPnl === null || tradesTaken === null ? dailyActivity(activeSession.date, { capital: config.capital }) : null;
+  const effectiveDayPnl = dayPnl ?? activity.realizedPnl;
+  const effectiveTradesTaken = tradesTaken ?? activity.tradesTaken;
+  const effectiveKillSwitch = killSwitchActive ?? killSwitchState();
 
-export function recordTradeImpact({ pnl = 0, countTrade = false }) {
-  ensureRiskStateForSession();
-  riskState = {
-    ...riskState,
-    dayPnl: riskState.dayPnl + pnl,
-    tradesTaken: riskState.tradesTaken + (countTrade ? 1 : 0),
-    updatedAt: new Date().toISOString(),
-  };
-  saveJson(riskStateName, riskState);
-  return riskState;
-}
-
-export function validateOrder(order, { config, tokenReady, liveTradingEnabled, allowOutsideMarket = false }) {
-  const session = ensureRiskStateForSession();
   const errors = [];
   const quantity = Number(order.quantity ?? 0);
   const price = Number(order.price ?? order.estimatedPrice ?? 0);
@@ -116,19 +91,19 @@ export function validateOrder(order, { config, tokenReady, liveTradingEnabled, a
   const lossAmount = (config.capital * config.maxLossPct) / 100;
   const isEntry = isEntryOrder(order);
 
-  if (riskState.killSwitchActive) {
+  if (effectiveKillSwitch && isEntry) {
     errors.push("Kill switch is active");
   }
-  if (isEntry && !allowOutsideMarket && !session.marketOpen) {
+  if (isEntry && !allowOutsideMarket && !activeSession.marketOpen) {
     errors.push("Indian cash market is closed");
   }
-  if (isEntry && !allowOutsideMarket && !session.freshEntriesAllowed) {
+  if (isEntry && !allowOutsideMarket && !activeSession.freshEntriesAllowed) {
     errors.push("Fresh entries are not allowed in the current market phase");
   }
-  if (!tokenReady) {
+  if (mode === "live" && !tokenReady) {
     errors.push("Kite token is missing");
   }
-  if (!liveTradingEnabled) {
+  if (mode === "live" && !liveTradingEnabled) {
     errors.push("LIVE_TRADING_ENABLED is false");
   }
   if (order.exchange !== "NSE") {
@@ -146,10 +121,10 @@ export function validateOrder(order, { config, tokenReady, liveTradingEnabled, a
   if (isEntry && Number.isFinite(notional) && notional > config.capital * 0.98) {
     errors.push("Order exceeds daily capital allocation");
   }
-  if (isEntry && riskState.tradesTaken >= config.maxTrades) {
+  if (isEntry && effectiveTradesTaken >= config.maxTrades) {
     errors.push("Max trades reached");
   }
-  if (isEntry && riskState.dayPnl <= -lossAmount) {
+  if (isEntry && effectiveDayPnl <= -lossAmount) {
     errors.push("Daily loss limit reached");
   }
 
@@ -159,48 +134,6 @@ export function validateOrder(order, { config, tokenReady, liveTradingEnabled, a
   };
 }
 
-export function validatePaperOrder(order, { config, allowOutsideMarket = false }) {
-  const session = ensureRiskStateForSession();
-  const errors = [];
-  const quantity = Number(order.quantity ?? 0);
-  const price = Number(order.price ?? order.estimatedPrice ?? 0);
-  const notional = quantity * price;
-  const lossAmount = (config.capital * config.maxLossPct) / 100;
-  const isEntry = isEntryOrder(order);
-
-  if (riskState.killSwitchActive) {
-    errors.push("Kill switch is active");
-  }
-  if (isEntry && !allowOutsideMarket && !session.marketOpen) {
-    errors.push("Indian cash market is closed");
-  }
-  if (isEntry && !allowOutsideMarket && !session.freshEntriesAllowed) {
-    errors.push("Fresh entries are not allowed in the current market phase");
-  }
-  if (order.exchange !== "NSE") {
-    errors.push("Only NSE cash symbols are allowed");
-  }
-  if ((order.product ?? "MIS") !== "MIS") {
-    errors.push("Only MIS intraday product is allowed");
-  }
-  if (!["BUY", "SELL"].includes(order.transactionType)) {
-    errors.push("Transaction type must be BUY or SELL");
-  }
-  if (!Number.isFinite(quantity) || quantity <= 0) {
-    errors.push("Quantity must be positive");
-  }
-  if (isEntry && Number.isFinite(notional) && notional > config.capital * 0.98) {
-    errors.push("Order exceeds daily capital allocation");
-  }
-  if (isEntry && riskState.tradesTaken >= config.maxTrades) {
-    errors.push("Max trades reached");
-  }
-  if (isEntry && riskState.dayPnl <= -lossAmount) {
-    errors.push("Daily loss limit reached");
-  }
-
-  return {
-    ok: errors.length === 0,
-    errors,
-  };
+export function validatePaperOrder(order, context) {
+  return validateOrder(order, { ...context, mode: "paper" });
 }

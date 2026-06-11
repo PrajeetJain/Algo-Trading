@@ -1,0 +1,8 @@
+node_modules
+dist
+.aindra-data
+.env
+.git
+*.log
+docs
+tests

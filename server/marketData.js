@@ -13,12 +13,28 @@ function seededBasePrice(symbol) {
     TCS: 3916.4,
     SBIN: 827.25,
     AXISBANK: 1178.6,
+    KOTAKBANK: 1764.2,
+    HCLTECH: 1545.6,
+    TECHM: 1490.3,
     LT: 3588.25,
     BHARTIARTL: 1398.1,
     MARUTI: 12442.6,
+    TATAMOTORS: 948.4,
+    "M&M": 2876.1,
     TITAN: 3479.3,
+    HINDUNILVR: 2392.8,
+    ITC: 432.6,
     ULTRACEMCO: 10924.9,
+    TATASTEEL: 152.3,
+    JSWSTEEL: 938.7,
+    SUNPHARMA: 1764.9,
+    CIPLA: 1496.2,
+    BAJFINANCE: 6890.5,
+    NTPC: 354.8,
+    ONGC: 246.7,
     "NIFTY 50": 23150,
+    "NIFTY BANK": 49650,
+    "INDIA VIX": 14.2,
   };
   return prices[symbol] ?? 1000;
 }
@@ -130,9 +146,31 @@ function mergeStreamQuotes(items, streamQuotes, restQuotes) {
   return items.map((item) => bySymbol.get(item.tradingsymbol)).filter(Boolean);
 }
 
+function realQuotesFromRest(items, data) {
+  const quotes = [];
+  const missing = [];
+  for (const item of items) {
+    const key = instrumentKey(item);
+    if (data[key]) {
+      quotes.push(normalizeKiteQuote(key, item, data[key]));
+    } else {
+      missing.push(item.tradingsymbol);
+    }
+  }
+  return { quotes, missing };
+}
+
+function missingFromQuotes(items, quotes) {
+  const present = new Set(quotes.map((quote) => quote.symbol));
+  return items.map((item) => item.tradingsymbol).filter((symbol) => !present.has(symbol));
+}
+
 export async function getQuoteSnapshot(kiteClient, tokenReady, marketStream = null) {
   const items = [...watchlist, ...marketContextSymbols];
   if (tokenReady) {
+    // Token ready: only real Kite data may be returned. Symbols without real
+    // quotes are dropped and reported in `missing` — never backfilled with the
+    // simulator, so paper evidence cannot be contaminated by fake prices.
     try {
       if (marketStream) {
         const cache = readJson(instrumentCacheName, { instruments: {} });
@@ -145,29 +183,28 @@ export async function getQuoteSnapshot(kiteClient, tokenReady, marketStream = nu
               try {
                 const instruments = items.map(instrumentKey);
                 const data = await kiteClient.quote(instruments);
-                const restQuotes = items.map((item) => {
-                  const key = instrumentKey(item);
-                  return data[key] ? normalizeKiteQuote(key, item, data[key]) : mockQuote(item);
-                });
-                appendEvent("market.quotes", { source: "kite-ws-rest-depth", count: streamQuotes.length });
-                return { source: "kite-ws-rest-depth", quotes: mergeStreamQuotes(items, streamQuotes, restQuotes) };
+                const rest = realQuotesFromRest(items, data);
+                const merged = mergeStreamQuotes(items, streamQuotes, rest.quotes);
+                appendEvent("market.quotes", { source: "kite-ws-rest-depth", count: merged.length });
+                return { source: "kite-ws-rest-depth", quotes: merged, missing: missingFromQuotes(items, merged) };
               } catch (error) {
                 appendEvent("market.depth_fallback_error", {
                   message: error instanceof Error ? error.message : "depth fallback error",
                 });
               }
             }
-            appendEvent("market.quotes", { source: "kite-ws", count: streamQuotes.length });
-            return { source: "kite-ws", quotes: mergeStreamQuotes(items, streamQuotes, items.map(mockQuote)) };
+            const merged = mergeStreamQuotes(items, streamQuotes, []);
+            appendEvent("market.quotes", { source: "kite-ws", count: merged.length });
+            return { source: "kite-ws", quotes: merged, missing: missingFromQuotes(items, merged) };
           }
         }
       }
       const instruments = items.map(instrumentKey);
       const data = await kiteClient.quote(instruments);
-      const quotes = items.map((item) => {
-        const key = instrumentKey(item);
-        return data[key] ? normalizeKiteQuote(key, item, data[key]) : mockQuote(item);
-      });
+      const { quotes, missing } = realQuotesFromRest(items, data);
+      if (missing.length) {
+        appendEvent("market.missing_quotes", { source: "kite-rest", missing });
+      }
       if (marketStream) {
         const cache = readJson(instrumentCacheName, { instruments: {} });
         if (!Object.keys(cache.instruments ?? {}).length) {
@@ -177,14 +214,17 @@ export async function getQuoteSnapshot(kiteClient, tokenReady, marketStream = nu
         }
       }
       appendEvent("market.quotes", { source: "kite-rest", count: quotes.length });
-      return { source: "kite-rest", quotes };
+      return { source: "kite-rest", quotes, missing };
     } catch (error) {
       appendEvent("market.error", { message: error instanceof Error ? error.message : "quote error" });
+      // Token is ready but Kite failed: return no quotes rather than fake
+      // ones. The strategy layer treats an empty snapshot as WAIT.
+      return { source: "kite-error", quotes: [], missing: items.map((item) => item.tradingsymbol) };
     }
   }
 
   const quotes = items.map(mockQuote);
-  return { source: "simulator", quotes };
+  return { source: "simulator", quotes, missing: [] };
 }
 
 function parseInstrumentCsv(csv) {
@@ -239,8 +279,19 @@ function mockCandles(symbol, days = 5) {
   return candles;
 }
 
+// 5-minute candles only change every 5 minutes; the strategy endpoint is
+// polled every few seconds. Cache per symbol to avoid hammering the Kite
+// historical API (350ms rate limit x 9 symbols = seconds per signals call).
+const candleCache = new Map();
+const CANDLE_CACHE_TTL_MS = 3 * 60 * 1000;
+
 export async function getCandles(kiteClient, tokenReady, symbol, interval = "5minute", days = 5) {
   if (tokenReady) {
+    const cacheKey = `${symbol}:${interval}:${days}`;
+    const cached = candleCache.get(cacheKey);
+    if (cached && Date.now() - cached.at < CANDLE_CACHE_TTL_MS) {
+      return cached.payload;
+    }
     const cache = readJson(instrumentCacheName, { instruments: {} });
     let token = cache.instruments?.[symbol]?.instrumentToken;
     if (!token) {
@@ -252,7 +303,7 @@ export async function getCandles(kiteClient, tokenReady, symbol, interval = "5mi
       const from = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
       const format = (date) => date.toISOString().slice(0, 19).replace("T", " ");
       const data = await kiteClient.historical(token, interval, format(from), format(to));
-      return {
+      const payload = {
         source: "kite-historical",
         symbol,
         candles: data.candles.map((row) => ({
@@ -264,7 +315,12 @@ export async function getCandles(kiteClient, tokenReady, symbol, interval = "5mi
           volume: row[5],
         })),
       };
+      candleCache.set(cacheKey, { at: Date.now(), payload });
+      return payload;
     }
+    // Token ready but no instrument token resolved: return no candles rather
+    // than simulated ones, so real-data sessions never mix in fake history.
+    return { source: "kite-missing-instrument", symbol, candles: [] };
   }
   return { source: "simulator", symbol, candles: mockCandles(symbol, days) };
 }
@@ -272,7 +328,19 @@ export async function getCandles(kiteClient, tokenReady, symbol, interval = "5mi
 export async function getCandlesForWatchlist(kiteClient, tokenReady, symbols, days = 5) {
   const result = {};
   for (const symbol of symbols) {
-    result[symbol] = (await getCandles(kiteClient, tokenReady, symbol, "5minute", days)).candles;
+    try {
+      result[symbol] = (await getCandles(kiteClient, tokenReady, symbol, "5minute", days)).candles;
+    } catch (error) {
+      // One symbol failing must not take down the whole signals endpoint.
+      // Serve stale cache if available, otherwise no candles for this symbol.
+      const stale = candleCache.get(`${symbol}:5minute:${days}`);
+      result[symbol] = stale?.payload.candles ?? [];
+      appendEvent("market.candles_error", {
+        symbol,
+        message: error instanceof Error ? error.message : "candles error",
+        servedStaleCache: Boolean(stale),
+      });
+    }
   }
   return result;
 }

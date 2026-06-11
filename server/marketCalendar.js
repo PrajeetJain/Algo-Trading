@@ -1,7 +1,26 @@
 import { readJson } from "./database.js";
 
 const IST_TIME_ZONE = "Asia/Kolkata";
-const DEFAULT_HOLIDAYS = new Set();
+// Official NSE equity-segment trading holidays for 2026 (weekday closures).
+// Override or extend via NSE_HOLIDAYS env or market-holidays.json.
+const DEFAULT_HOLIDAYS = new Set([
+  "2026-01-15", // Municipal Corporation Election - Maharashtra
+  "2026-01-26", // Republic Day
+  "2026-03-03", // Holi
+  "2026-03-26", // Shri Ram Navami
+  "2026-03-31", // Shri Mahavir Jayanti
+  "2026-04-03", // Good Friday
+  "2026-04-14", // Dr. Baba Saheb Ambedkar Jayanti
+  "2026-05-01", // Maharashtra Day
+  "2026-05-28", // Bakri Id
+  "2026-06-26", // Muharram
+  "2026-09-14", // Ganesh Chaturthi
+  "2026-10-02", // Mahatma Gandhi Jayanti
+  "2026-10-20", // Dussehra
+  "2026-11-10", // Diwali - Balipratipada
+  "2026-11-24", // Prakash Gurpurb Sri Guru Nanak Dev
+  "2026-12-25", // Christmas
+]);
 
 function istParts(date = new Date()) {
   const parts = new Intl.DateTimeFormat("en-IN", {
@@ -64,12 +83,16 @@ export function getMarketSession(date = new Date()) {
   if (!closedDay) {
     if (minutes >= 9 * 60 && minutes < 9 * 60 + 15) {
       phase = "preopen";
-    } else if (minutes >= 9 * 60 + 15 && minutes <= 15 * 60 + 29) {
+    } else if (minutes >= 9 * 60 + 15 && minutes < 15 * 60 + 30) {
       phase = "open";
-    } else if (minutes >= 15 * 60 + 40 && minutes <= 16 * 60) {
+    } else if (minutes >= 15 * 60 + 30 && minutes <= 16 * 60) {
       phase = "closing";
     }
   }
+  // Stale-calendar guard: if the configured holiday list has no entries for
+  // the current year, holiday detection cannot be trusted.
+  const currentYear = dateKey.slice(0, 4);
+  const holidayListStale = ![...holidays].some((item) => item.startsWith(currentYear));
 
   return {
     date: dateKey,
@@ -86,6 +109,7 @@ export function getMarketSession(date = new Date()) {
     closedDay,
     weekend,
     holiday,
+    holidayListStale,
     reason: weekend ? "Weekend" : holiday ? "Exchange holiday" : phase === "closed" ? "Outside market hours" : "Trading session",
     nextOpenAt: phase === "closed" || closedDay ? nextWeekdayOpen(date) : null,
     holidays: [...holidays].sort(),
