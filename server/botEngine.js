@@ -21,14 +21,14 @@ const ENGINE_STATE_KEY = "engine";
 const CONFIG_STATE_KEY = "config";
 const MAX_SESSION_TRADES = 200;
 
-// See server/index.js defaultConfig for the targetPct/maxLossPct rationale:
-// the loss cap leaves room for maxTrades full stop-outs including costs, and
-// the target is reachable with one full winner plus a small second win.
+// See server/index.js defaultConfig for the risk-budget rationale: the loss
+// cap leaves room for maxTrades full stop-outs including costs, and the day
+// target is symmetric with the day stop.
 export const defaultEngineConfig = {
   capital: 200000,
-  targetPct: 0.75,
-  maxLossPct: 0.75,
-  maxTrades: 2,
+  targetPct: 1,
+  maxLossPct: 1,
+  maxTrades: 3,
   slippageBps: 8,
   minScore: 70,
   minMomentumPct: 0.1,

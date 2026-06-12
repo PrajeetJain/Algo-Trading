@@ -580,7 +580,7 @@ export const SIM_STORAGE_KEY = "aindra-current-session";
 export const REPORTS_STORAGE_KEY = "aindra-daily-reports";
 export const LOCAL_RESET_STORAGE_KEY = "aindra-local-reset-version";
 export const LOCAL_RESET_VERSION = "2026-06-09-clean-50k-v1";
-export const SAFE_CONFIG_VERSION = "6";
+export const SAFE_CONFIG_VERSION = "7";
 export const PROFIT_MILESTONE_PCTS = [0.25, 0.5, 0.75, 1];
 
 // Capital 2L: positions sized off 0.25% risk reach ~Rs 62k/side, so the
@@ -588,9 +588,9 @@ export const PROFIT_MILESTONE_PCTS = [0.25, 0.5, 0.75, 1];
 // Rs 20 brokerage cap is within reach on wider positions.
 export const defaultConfig: Config = {
   capital: 200000,
-  targetPct: 0.75,
-  maxLossPct: 0.75,
-  maxTrades: 2,
+  targetPct: 1,
+  maxLossPct: 1,
+  maxTrades: 3,
   slippageBps: 8,
   minScore: 70,
   minMomentumPct: 0.1,

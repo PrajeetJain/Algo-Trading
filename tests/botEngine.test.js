@@ -2,8 +2,8 @@ import { ok, strictEqual } from "node:assert";
 import { test } from "node:test";
 import { applyTick, defaultEngineConfig, exitFill } from "../server/botEngine.js";
 
-// Pin capital so daily target/loss thresholds (0.75% = 375) stay small
-// enough for the fixture positions to trip them, regardless of defaults.
+// Pin capital so daily target/loss thresholds (1% = 500) stay small enough
+// for the fixture positions to trip them, regardless of defaults.
 const config = { ...defaultEngineConfig, capital: 50000 };
 
 const openSession = {
@@ -89,7 +89,7 @@ test("never enters on simulator data", () => {
 });
 
 test("never enters when max trades reached", () => {
-  const result = applyTick(baseInput({ strategy: strategyWith({ action: "TRADE" }), tradesTaken: 2 }));
+  const result = applyTick(baseInput({ strategy: strategyWith({ action: "TRADE" }), tradesTaken: config.maxTrades }));
   strictEqual(result.entry, null);
   ok(result.message.includes("max trades"), result.message);
 });

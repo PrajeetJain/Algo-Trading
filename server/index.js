@@ -37,16 +37,16 @@ if (savedSession && isSessionUsable(savedSession)) {
   kiteProfile = savedSession.profile ?? null;
 }
 
-// targetPct/maxLossPct rationale: a full stop-out costs ~1.28x the nominal
-// risk once slippage and charges land (~Rs 160 on a Rs 125 risk), so the
-// daily loss cap must leave room for maxTrades full stops (2 x 160 = 320 <
-// 375). The daily target is set so one full winner plus a small second win
-// can actually reach it (a perfect 2R winner nets ~Rs 250).
+// Risk budget coherence: a full stop-out costs ~1.28x nominal risk once
+// slippage and charges land (~0.32% of capital per stop at 0.25% risk), so
+// maxLossPct must satisfy maxLossPct >= maxTrades x 0.32% (3 x 0.32% =
+// 0.96% <= 1%). Day target is symmetric with the day stop so winning days
+// are not truncated earlier than losing days are cut.
 const defaultConfig = {
   capital: 200000,
-  targetPct: 0.75,
-  maxLossPct: 0.75,
-  maxTrades: 2,
+  targetPct: 1,
+  maxLossPct: 1,
+  maxTrades: 3,
   slippageBps: 8,
   minScore: 70,
   minMomentumPct: 0.1,
