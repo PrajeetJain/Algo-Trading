@@ -25,7 +25,7 @@ const MAX_SESSION_TRADES = 200;
 // the loss cap leaves room for maxTrades full stop-outs including costs, and
 // the target is reachable with one full winner plus a small second win.
 export const defaultEngineConfig = {
-  capital: 50000,
+  capital: 200000,
   targetPct: 0.75,
   maxLossPct: 0.75,
   maxTrades: 2,

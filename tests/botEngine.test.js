@@ -2,7 +2,9 @@ import { ok, strictEqual } from "node:assert";
 import { test } from "node:test";
 import { applyTick, defaultEngineConfig, exitFill } from "../server/botEngine.js";
 
-const config = { ...defaultEngineConfig };
+// Pin capital so daily target/loss thresholds (0.75% = 375) stay small
+// enough for the fixture positions to trip them, regardless of defaults.
+const config = { ...defaultEngineConfig, capital: 50000 };
 
 const openSession = {
   date: "2026-06-11",

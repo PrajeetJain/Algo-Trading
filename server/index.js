@@ -43,7 +43,7 @@ if (savedSession && isSessionUsable(savedSession)) {
 // 375). The daily target is set so one full winner plus a small second win
 // can actually reach it (a perfect 2R winner nets ~Rs 250).
 const defaultConfig = {
-  capital: 50000,
+  capital: 200000,
   targetPct: 0.75,
   maxLossPct: 0.75,
   maxTrades: 2,
