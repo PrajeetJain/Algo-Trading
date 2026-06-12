@@ -12,7 +12,9 @@ export const watchlist = [
   { exchange: "NSE", tradingsymbol: "LT", name: "Larsen & Toubro", sector: "Infrastructure" },
   { exchange: "NSE", tradingsymbol: "BHARTIARTL", name: "Bharti Airtel", sector: "Telecom" },
   { exchange: "NSE", tradingsymbol: "MARUTI", name: "Maruti Suzuki", sector: "Auto" },
-  { exchange: "NSE", tradingsymbol: "TATAMOTORS", name: "Tata Motors", sector: "Auto" },
+  // TATAMOTORS ceased trading after the 2025 demerger — replaced with
+  // another liquid Auto large cap so the sector keeps 3 members.
+  { exchange: "NSE", tradingsymbol: "EICHERMOT", name: "Eicher Motors", sector: "Auto" },
   { exchange: "NSE", tradingsymbol: "M&M", name: "Mahindra & Mahindra", sector: "Auto" },
   { exchange: "NSE", tradingsymbol: "TITAN", name: "Titan Company", sector: "Consumer" },
   { exchange: "NSE", tradingsymbol: "HINDUNILVR", name: "Hindustan Unilever", sector: "Consumer" },

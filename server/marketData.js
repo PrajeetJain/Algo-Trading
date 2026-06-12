@@ -19,7 +19,7 @@ function seededBasePrice(symbol) {
     LT: 3588.25,
     BHARTIARTL: 1398.1,
     MARUTI: 12442.6,
-    TATAMOTORS: 948.4,
+    EICHERMOT: 5418.5,
     "M&M": 2876.1,
     TITAN: 3479.3,
     HINDUNILVR: 2392.8,

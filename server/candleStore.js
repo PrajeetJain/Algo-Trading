@@ -40,26 +40,36 @@ export function normalizeCandleTime(time) {
 }
 
 export function upsertCandles(symbol, interval, candles) {
-  const statement = getDb().prepare(
+  const database = getDb();
+  const statement = database.prepare(
     `INSERT INTO candles (symbol, interval, time, open, high, low, close, volume)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(symbol, interval, time) DO UPDATE SET
        open = excluded.open, high = excluded.high, low = excluded.low,
        close = excluded.close, volume = excluded.volume`
   );
+  // One transaction per symbol: without it every insert pays its own fsync
+  // and a 60-day sync takes minutes instead of seconds.
+  database.exec("BEGIN");
   let count = 0;
-  for (const candle of candles) {
-    statement.run(
-      symbol,
-      interval,
-      normalizeCandleTime(candle.time),
-      candle.open,
-      candle.high,
-      candle.low,
-      candle.close,
-      candle.volume ?? 0
-    );
-    count += 1;
+  try {
+    for (const candle of candles) {
+      statement.run(
+        symbol,
+        interval,
+        normalizeCandleTime(candle.time),
+        candle.open,
+        candle.high,
+        candle.low,
+        candle.close,
+        candle.volume ?? 0
+      );
+      count += 1;
+    }
+    database.exec("COMMIT");
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
   }
   return count;
 }
