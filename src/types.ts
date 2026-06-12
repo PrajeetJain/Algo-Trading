@@ -580,7 +580,7 @@ export const SIM_STORAGE_KEY = "aindra-current-session";
 export const REPORTS_STORAGE_KEY = "aindra-daily-reports";
 export const LOCAL_RESET_STORAGE_KEY = "aindra-local-reset-version";
 export const LOCAL_RESET_VERSION = "2026-06-09-clean-50k-v1";
-export const SAFE_CONFIG_VERSION = "7";
+export const SAFE_CONFIG_VERSION = "8";
 export const PROFIT_MILESTONE_PCTS = [0.25, 0.5, 0.75, 1];
 
 // Capital 2L: positions sized off 0.25% risk reach ~Rs 62k/side, so the
@@ -596,8 +596,10 @@ export const defaultConfig: Config = {
   minMomentumPct: 0.1,
   maxSpreadBps: 18,
   riskPerTradePct: 0.25,
-  stopLossPct: 0.8,
-  takeProfitPct: 1.6,
+  // Lab-mapped geometry (Jun 2026): tighter stops monotonically lost more
+  // (noise harvesting); S1.2/T1.8 sits mid-frontier of the tested gradient.
+  stopLossPct: 1.2,
+  takeProfitPct: 1.8,
   atrStopMultiplier: 1.5,
   minRelativeStrengthPct: 0.05,
   minNetRewardRisk: 1.2,

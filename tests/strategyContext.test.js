@@ -191,6 +191,48 @@ test("single-stock sectors do not get the sector-strength bonus", () => {
   strictEqual(pairedScore - soloScore, 5, `expected exactly the +5 sector bonus, got ${pairedScore - soloScore}`);
 });
 
+test("vwap-pullback rewards proximity to VWAP, not extension above it", () => {
+  const today = todayIst();
+  // Identical quote (same day momentum and RS) in both runs; only the VWAP
+  // moves, via the candle level: ~at the price vs ~1% below it.
+  const makeCandles = (level) =>
+    Array.from({ length: 10 }, (_, index) => ({
+      time: `${today}T${String(9 + Math.floor((15 + index * 5) / 60)).padStart(2, "0")}:${String((15 + index * 5) % 60).padStart(2, "0")}:00+05:30`,
+      open: level,
+      high: level + 1,
+      low: level - 1,
+      close: level,
+      volume: 50000,
+    }));
+  const config = { ...defaultEngineConfig, strategyMode: "vwap-pullback" };
+  const run = (vwapLevel) =>
+    generateSignals({
+      quotes: [quote("NIFTY 50", "Index", 23100, 23000), quote("INFY", "IT Services", 1516, 1495)],
+      candlesBySymbol: { INFY: makeCandles(vwapLevel) },
+      config,
+      asOf: `${today}T11:00:00+05:30`,
+    }).find((signal) => signal.symbol === "INFY");
+  const nearVwap = run(1515.5);
+  const extended = run(1500);
+  ok(
+    nearVwap.strategyScore > extended.strategyScore,
+    `near-VWAP (${nearVwap.strategyScore}) must outscore extended (${extended.strategyScore})`
+  );
+});
+
+test("mean-reversion composite is reachable for dip-buys", () => {
+  // A stock down hard vs a flat NIFTY: negative RS must now CONTRIBUTE to
+  // the mean-reversion composite instead of zeroing it.
+  const signals = generateSignals({
+    quotes: [quote("NIFTY 50", "Index", 23000, 23000), quote("INFY", "IT Services", 1455, 1500)],
+    candlesBySymbol: {},
+    config: { ...defaultEngineConfig, strategyMode: "mean-reversion" },
+  });
+  const infy = signals.find((signal) => signal.symbol === "INFY");
+  strictEqual(infy.strategy, "mean-reversion");
+  ok(infy.score > 30, `composite should be materially above zero, got ${infy.score}`);
+});
+
 // --- live engine trade management ---
 
 const openSession = {

@@ -254,7 +254,7 @@ function regimeSupportsSignal(regime, side, mode) {
   return side === "SELL" ? regime.bias === "bearish" : regime.bias === "bullish";
 }
 
-function strategyScores({ quote, candles, intradayCandles, momentumPct, dayMomentumPct, aboveVwap, pulse, niftyBias, relativeStrengthPct, marketRegime }) {
+function strategyScores({ quote, candles, intradayCandles, momentumPct, dayMomentumPct, aboveVwap, vwapDistancePct, pulse, niftyBias, relativeStrengthPct, marketRegime }) {
   const closeValues = candles.slice(-20).map((candle) => candle.close);
   const bands = bollinger(candles);
   const signalRsi = rsi(candles);
@@ -299,18 +299,24 @@ function strategyScores({ quote, candles, intradayCandles, momentumPct, dayMomen
     setup: `RSI ${signalRsi.toFixed(0)}, lower band ${lowerBandDistance.toFixed(0)}%`,
   };
 
+  // A pullback entry requires price NEAR VWAP, not merely above it — full
+  // points at VWAP, fading to zero 0.4% away. Buying a stock 1%+ extended
+  // above VWAP is chasing, and the backtest showed it loses (16% win rate).
+  const vwapProximityLong = aboveVwap ? clamp(20 - vwapDistancePct * 50, 0, 20) : 0;
+  const vwapProximityShort = !aboveVwap ? clamp(20 - -vwapDistancePct * 50, 0, 20) : 0;
+
   const vwapPullback = {
     mode: "vwap-pullback",
     label: "VWAP Pullback",
     side: "BUY",
     score:
-      (aboveVwap ? 20 : 0) +
+      vwapProximityLong +
       clamp(relativeStrengthPct * 14, 0, 16) +
       clamp((pulse - 0.8) * 16, 0, 20) +
       clamp(dayMomentumPct * 14, 0, 20) +
       clamp(14 - Math.abs(momentumPct) * 3, 0, 14) +
       bullishRegime,
-    setup: `${aboveVwap ? "above" : "below"} VWAP, pullback pressure ${Math.abs(momentumPct).toFixed(2)}%`,
+    setup: `${vwapDistancePct.toFixed(2)}% from VWAP, pullback pressure ${Math.abs(momentumPct).toFixed(2)}%`,
   };
 
   const openingBreakout = {
@@ -362,13 +368,13 @@ function strategyScores({ quote, candles, intradayCandles, momentumPct, dayMomen
     label: "Short VWAP Pullback",
     side: "SELL",
     score:
-      (!aboveVwap ? 20 : 0) +
+      vwapProximityShort +
       clamp(-relativeStrengthPct * 14, 0, 16) +
       clamp((pulse - 0.8) * 16, 0, 20) +
       clamp(-dayMomentumPct * 14, 0, 20) +
       clamp(14 - Math.abs(momentumPct) * 3, 0, 14) +
       bearishRegime,
-    setup: `${aboveVwap ? "above" : "below"} VWAP, pullback pressure ${Math.abs(momentumPct).toFixed(2)}%`,
+    setup: `${vwapDistancePct.toFixed(2)}% from VWAP, pullback pressure ${Math.abs(momentumPct).toFixed(2)}%`,
   };
 
   const openingBreakdown = {
@@ -499,11 +505,12 @@ export function generateSignals({ quotes, candlesBySymbol, config, asOf = new Da
       const signalAtr = atr(candles);
       const pulse = volumePulse(candles);
       const aboveVwap = quote.ltp >= signalVwap;
+      const vwapDistancePct = signalVwap ? ((quote.ltp - signalVwap) / quote.ltp) * 100 : 0;
       const spreadBps = Number.isFinite(quote.spreadBps) && quote.spreadBps > 0 ? quote.spreadBps : 999;
       // Bank and NBFC names align better with Bank Nifty than with NIFTY 50.
       const sectorIndexBias = quote.sector === "Banking" || quote.sector === "Financials" ? bankNiftyBias : niftyBias;
       const selectedStrategy = selectStrategy(
-        strategyScores({ quote, candles, intradayCandles, momentumPct, dayMomentumPct, aboveVwap, pulse, niftyBias: sectorIndexBias, relativeStrengthPct, marketRegime }),
+        strategyScores({ quote, candles, intradayCandles, momentumPct, dayMomentumPct, aboveVwap, vwapDistancePct, pulse, niftyBias: sectorIndexBias, relativeStrengthPct, marketRegime }),
         config
       );
       const side = selectedStrategy.side ?? "BUY";
@@ -512,7 +519,14 @@ export function generateSignals({ quotes, candlesBySymbol, config, asOf = new Da
       const spreadScore = clamp((1 - spreadBps / safeNumber(config.maxSpreadBps, 18)) * 14, 0, 14);
       const strategyScore = clamp(selectedStrategy.score * 0.5, 0, 50);
       const indexScore = clamp(directionalIndexBias * 6 + 6, 0, 10);
-      const relativeStrengthScore = clamp((directionalRelativeStrength / 0.6) * 16, 0, 16);
+      // Mean reversion buys weakness / sells strength, so for that family a
+      // NEGATIVE directional RS is the setup, not a defect. Without this the
+      // composite could structurally never reach minScore (0 trades in 42
+      // backtest days). Capped lower (12) than the trend families (16).
+      const relativeStrengthScore =
+        selectedStrategy.mode === "mean-reversion"
+          ? clamp((-directionalRelativeStrength / 0.6) * 12, 0, 12)
+          : clamp((directionalRelativeStrength / 0.6) * 16, 0, 16);
       const volatilityScore = signalAtr && quote.ltp ? clamp(10 - (signalAtr / quote.ltp) * 700, 0, 10) : 5;
       const regimePass = regimeSupportsSignal(marketRegime, side, selectedStrategy.mode);
       const regimeScore = regimePass ? 10 : marketRegime.bias === "neutral" ? 6 : 0;

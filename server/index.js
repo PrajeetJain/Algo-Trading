@@ -52,8 +52,10 @@ const defaultConfig = {
   minMomentumPct: 0.1,
   maxSpreadBps: 18,
   riskPerTradePct: 0.25,
-  stopLossPct: 0.8,
-  takeProfitPct: 1.6,
+  // Lab-mapped geometry (Jun 2026): see docs/LAB_NOTES.md — tighter stops
+  // monotonically lost more; S1.2/T1.8 is mid-frontier of the gradient.
+  stopLossPct: 1.2,
+  takeProfitPct: 1.8,
   atrStopMultiplier: 1.5,
   minRelativeStrengthPct: 0.05,
   minNetRewardRisk: 1.2,
