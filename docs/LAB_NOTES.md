@@ -126,6 +126,48 @@ configuration found is worth deploying real capital to.
 - Paper trading continues for SYSTEM validation and signal-data collection,
   not profit. Expectation: ~breakeven-minus-costs.
 
+## Session 2026-06-15 (iteration 3: trades-per-day, validated)
+
+Trigger: live Day 3 peaked ~+625 then ended -262. Codex first read it as a
+profit-protection failure; the per-trade MFE/MAE showed the real cause — the
+day's first trade (INFY) won +269 via the trailing stop, then a SECOND trade
+(HDFCBANK, MFE=0, bad from entry) lost -531. Hypothesis: later trades are
+lower quality.
+
+### maxTrades sweep (42-day replay, S1.2/T1.8)
+
+| maxTrades | Net | Trades | Win% | PF | Expectancy/trade | MaxDD |
+|---|---|---|---|---|---|---|
+| 1 | -2,523 | 42 | 31% | 0.67 | -60 | -3,173 |
+| 2 | -4,366 | 69 | 33% | 0.63 | -63 | -4,759 |
+| 3 | -5,821 | 78 | 31% | 0.56 | -75 | -5,901 |
+
+Per-trade expectancy DEGRADES with more trades (-60 -> -63 -> -75): not just
+"fewer trades = less bleed" (that would be flat) but genuinely lower-quality
+later trades. The first qualifying setup of the day is the best.
+
+### Walk-forward (same geometry grid, 6 folds)
+
+| | maxTrades=1 | maxTrades=3 |
+|---|---|---|
+| OOS net | -1,619 | -3,972 |
+| OOS daily avg | -54 | -132 |
+| OOS win rate | 37% | 30% |
+| worst fold | -926 | -2,070 |
+
+maxTrades=1 better or equal in ALL 6 folds — robust, not a curve-fit. Both
+carry an overfit warning, but that is the geometry grid search (known); the
+maxTrades choice is a single structural decision that transferred cleanly.
+
+### Decision
+
+**Adopted maxTrades=1 live** (was 3). Validated OOS, mechanistically sound,
+halves the bleed and lifts win rate to 37%. Still NEGATIVE (-54/day OOS) —
+this is loss reduction + quality concentration, NOT edge creation. Daily
+profit-lock idea deferred: with one trade/day it is largely redundant with
+the per-trade trailing stop. Trade-off: ~1 trade/day means ~30 trading days
+(6 weeks) to reach the Verdict's 30-trade bar.
+
 ### Next research directions (in priority order)
 
 1. **Longer signal timeframe** — 15m/30m bars to cut noise; the 5m gradient

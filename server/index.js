@@ -37,16 +37,15 @@ if (savedSession && isSessionUsable(savedSession)) {
   kiteProfile = savedSession.profile ?? null;
 }
 
-// Risk budget coherence: a full stop-out costs ~1.28x nominal risk once
-// slippage and charges land (~0.32% of capital per stop at 0.25% risk), so
-// maxLossPct must satisfy maxLossPct >= maxTrades x 0.32% (3 x 0.32% =
-// 0.96% <= 1%). Day target is symmetric with the day stop so winning days
-// are not truncated earlier than losing days are cut.
+// maxTrades 1: walk-forward (Jun 2026, docs/LAB_NOTES.md) showed per-trade
+// expectancy degrades with each extra trade and OOS loss roughly halves at 1
+// vs 3 trades — the day's first qualifying setup is the best one. The 1% day
+// target/loss are backstops (a single 0.25%-risk trade never reaches them).
 const defaultConfig = {
   capital: 200000,
   targetPct: 1,
   maxLossPct: 1,
-  maxTrades: 3,
+  maxTrades: 1,
   slippageBps: 8,
   minScore: 70,
   minMomentumPct: 0.1,

@@ -580,7 +580,7 @@ export const SIM_STORAGE_KEY = "aindra-current-session";
 export const REPORTS_STORAGE_KEY = "aindra-daily-reports";
 export const LOCAL_RESET_STORAGE_KEY = "aindra-local-reset-version";
 export const LOCAL_RESET_VERSION = "2026-06-09-clean-50k-v1";
-export const SAFE_CONFIG_VERSION = "8";
+export const SAFE_CONFIG_VERSION = "9";
 export const PROFIT_MILESTONE_PCTS = [0.25, 0.5, 0.75, 1];
 
 // Capital 2L: positions sized off 0.25% risk reach ~Rs 62k/side, so the
@@ -590,7 +590,12 @@ export const defaultConfig: Config = {
   capital: 200000,
   targetPct: 1,
   maxLossPct: 1,
-  maxTrades: 3,
+  // maxTrades 1: walk-forward (Jun 2026) showed per-trade expectancy degrades
+  // with each additional trade (-60 -> -63 -> -75) and OOS loss roughly
+  // halves at 1 vs 3 trades. The day's first qualifying setup is the highest
+  // quality; later trades scrape leftovers. Day target/loss are now pure
+  // backstops (a single 0.25%-risk trade never reaches the 1% day caps).
+  maxTrades: 1,
   slippageBps: 8,
   minScore: 70,
   minMomentumPct: 0.1,
