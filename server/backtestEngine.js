@@ -74,7 +74,11 @@ function groupByDay(candles) {
 export function replayBacktest({
   config,
   days = null,
-  stepCandles = DECISION_STEP,
+  // intervalFactor resamples the stored 5m candles: 1 = 5m, 3 = 15m, 6 = 30m.
+  intervalFactor = 1,
+  // Default decision cadence: ~15 min. At 5m that is every 3rd bar; on coarser
+  // timeframes each bar already spans >= 15 min, so decide every bar.
+  stepCandles = intervalFactor > 1 ? 1 : DECISION_STEP,
   spreadBps = ASSUMED_SPREAD_BPS,
   store = candleStore,
 }) {
@@ -89,7 +93,8 @@ export function replayBacktest({
   for (const symbol of symbols) {
     const contextFrom = Math.max(0, allDays.indexOf(replayDays[0]) - CONTEXT_DAYS);
     const wantedDays = allDays.slice(contextFrom, allDays.indexOf(replayDays[replayDays.length - 1]) + 1);
-    candlesBySymbolAll.set(symbol, groupByDay(store.candlesForDays(symbol, INTERVAL, wantedDays)));
+    const raw = store.candlesForDays(symbol, INTERVAL, wantedDays);
+    candlesBySymbolAll.set(symbol, groupByDay(candleStore.resampleCandles(raw, intervalFactor)));
   }
 
   const trades = [];

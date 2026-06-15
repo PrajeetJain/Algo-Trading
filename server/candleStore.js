@@ -74,6 +74,38 @@ export function upsertCandles(symbol, interval, candles) {
   return count;
 }
 
+// Resample 5-minute candles to a coarser timeframe (factor 3 = 15m, 6 = 30m)
+// without merging across day boundaries — each output bar stays within one
+// trading day. open=first, close=last, high=max, low=min, volume=sum.
+export function resampleCandles(candles, factor) {
+  if (factor <= 1) {
+    return candles;
+  }
+  const byDay = new Map();
+  for (const candle of candles) {
+    const day = String(candle.time).slice(0, 10);
+    if (!byDay.has(day)) {
+      byDay.set(day, []);
+    }
+    byDay.get(day).push(candle);
+  }
+  const out = [];
+  for (const dayCandles of byDay.values()) {
+    for (let index = 0; index < dayCandles.length; index += factor) {
+      const group = dayCandles.slice(index, index + factor);
+      out.push({
+        time: group[0].time,
+        open: group[0].open,
+        high: Math.max(...group.map((candle) => candle.high)),
+        low: Math.min(...group.map((candle) => candle.low)),
+        close: group[group.length - 1].close,
+        volume: group.reduce((total, candle) => total + (candle.volume ?? 0), 0),
+      });
+    }
+  }
+  return out;
+}
+
 export function candlesForDays(symbol, interval, days) {
   if (!days.length) {
     return [];

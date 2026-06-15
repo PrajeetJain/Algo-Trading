@@ -78,6 +78,54 @@ breakeven in training but does not transfer.
 3. Paper trading continues as **live-vs-lab calibration**, not as profit
    expectation.
 
+## Session 2026-06-15 (iteration 2: timeframe study)
+
+Hypothesis: longer signal timeframes (15m/30m) cut 5-minute noise and reveal
+entry edge. Added 5m->Nx candle resampling (day-boundary safe) and made the
+opening-range window time-based (09:15-09:45) so it is correct at any
+timeframe instead of a hardcoded 6-bar count.
+
+### Timeframe x geometry surface (42 days, full replay, net Rs)
+
+| Geometry | 5m | 15m | 30m |
+|---|---|---|---|
+| S0.8 / T1.6 | -15,308 | -9,360 | -8,174 |
+| S1.2 / T1.8 | -5,821 | -9,360 | - |
+| S1.5 / T2.25 | -5,039 | -4,409 | -5,582 |
+| S2.0 / T2.5 | -1,702 | -2,276 | -4,526 |
+
+Win rates clustered 22-36%, profit factor 0.30-0.67 everywhere. Square-off
+(held-to-EOD) was the dominant exit on every longer-timeframe run and was
+net negative — held trades are coin-flips that lose to costs.
+
+### Conclusion (definitive for this window)
+
+**No timeframe x geometry combination is positive.** Longer timeframes
+reduce loss ONLY by trading less (fewer cost-bleeding trades) — win rate
+does not improve, so there is no entry-edge discovery. The least-bad cell
+(5m, S2.0/T2.5, -1,702) is the widest-stop corner, i.e. "rarely stopped =
+entries minus costs" — the degenerate endpoint, not a real edge.
+
+The momentum family at wide stops is gross-flat (5m S2.0: +31 over 30
+trades; 15m S2.0: -137 over 31). That is the signature of **zero directional
+alpha**: entries are ~coin-flips, and every configuration just trades the
+cost structure, not an edge.
+
+**Parameter tuning is exhausted.** The problem is the alpha source, not the
+configuration. Continuing to sweep parameters would only manufacture
+overfit (the wide-frontier walk-forward already raised that warning). No
+configuration found is worth deploying real capital to.
+
+### Decisions
+
+- Kept time-based opening range and candle resampling (correctness +
+  research tooling — valuable regardless of edge).
+- Did NOT move live geometry to the least-bad S2.0 corner: it is still
+  negative, and chasing the least-negative widest-stop cell is itself
+  overfitting. Live stays at the mid-frontier S1.2/T1.8.
+- Paper trading continues for SYSTEM validation and signal-data collection,
+  not profit. Expectation: ~breakeven-minus-costs.
+
 ### Next research directions (in priority order)
 
 1. **Longer signal timeframe** — 15m/30m bars to cut noise; the 5m gradient

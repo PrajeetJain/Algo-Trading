@@ -19,8 +19,8 @@ const baseConfig = {
   minMomentumPct: 0.1,
   maxSpreadBps: 18,
   riskPerTradePct: 0.25,
-  stopLossPct: 0.8,
-  takeProfitPct: 1.6,
+  stopLossPct: 1.2,
+  takeProfitPct: 1.8,
   atrStopMultiplier: 1.5,
   minRelativeStrengthPct: 0.05,
   minNetRewardRisk: 1.2,
@@ -50,10 +50,11 @@ if (args.mode === "walkforward") {
     })
   );
 } else {
-  const report = replayBacktest({ config: baseConfig });
+  const report = replayBacktest({ config: baseConfig, intervalFactor: args.intervalFactor ?? 1 });
   console.log(
     JSON.stringify({
       label: args.label ?? "replay",
+      intervalFactor: args.intervalFactor ?? 1,
       netPnl: Math.round(report.netPnl),
       trades: report.trades,
       winRate: report.winRate,

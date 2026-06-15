@@ -143,8 +143,13 @@ function bollinger(candles, period = 20) {
   };
 }
 
+const OPENING_RANGE_END_MIN = 9 * 60 + 45; // 09:45 IST — first 30 minutes
+
+// Opening range = candles within the first 30 minutes of the session. Defined
+// by TIME, not bar count, so it is correct at any timeframe (six 5m bars, two
+// 15m bars, or one 30m bar all describe the same 09:15-09:45 window).
 function openingRange(candles) {
-  const range = candles.slice(0, Math.min(6, candles.length));
+  const range = candles.filter((candle) => istMinutesOfDay(candle.time) < OPENING_RANGE_END_MIN);
   if (!range.length) {
     return { high: 0, low: 0 };
   }
@@ -152,6 +157,13 @@ function openingRange(candles) {
     high: Math.max(...range.map((candle) => candle.high)),
     low: Math.min(...range.map((candle) => candle.low)),
   };
+}
+
+// The range is "complete" once the latest candle is at/after 09:45, i.e. the
+// whole opening window has formed — only then is a breakout meaningful.
+function openingRangeComplete(intradayCandles) {
+  const latest = intradayCandles.at(-1);
+  return Boolean(latest) && istMinutesOfDay(latest.time) >= OPENING_RANGE_END_MIN;
 }
 
 function charges(buyValue, sellValue) {
@@ -262,7 +274,7 @@ function strategyScores({ quote, candles, intradayCandles, momentumPct, dayMomen
   // once the range is COMPLETE (6 x 5min candles = 09:15-09:45). Before that
   // a "breakout" is just noise against a 1-2 candle range, so the
   // opening-range candidates score zero until the range has formed.
-  const rangeComplete = (intradayCandles?.length ?? 0) >= 6;
+  const rangeComplete = openingRangeComplete(intradayCandles ?? []);
   const range = openingRange(intradayCandles ?? []);
   const bandWidth = bands.upper - bands.lower;
   const lowerBandDistance = bandWidth ? ((quote.ltp - bands.lower) / bandWidth) * 100 : 50;
@@ -570,7 +582,7 @@ export function generateSignals({ quotes, candlesBySymbol, config, asOf = new Da
       const gapSensitive = selectedStrategy.mode === "momentum" || selectedStrategy.mode === "opening-range";
       const gapPass = !gapSensitive || !inGapWindow || Math.abs(gapPct) <= maxGapPct;
       // ORB needs the full 09:15-09:45 range before a breakout means anything.
-      const orbPass = selectedStrategy.mode !== "opening-range" || intradayCandles.length >= 6;
+      const orbPass = selectedStrategy.mode !== "opening-range" || openingRangeComplete(intradayCandles);
       const eligible =
         score >= config.minScore &&
         (selectedStrategy.mode === "mean-reversion" || directionalMomentumPass) &&
@@ -592,7 +604,7 @@ export function generateSignals({ quotes, candlesBySymbol, config, asOf = new Da
       if (!chargeAdjustedPass) gateReasons.push(`net R:R ${netRewardRisk.toFixed(2)}`);
       if (!vixPass) gateReasons.push(`VIX ${vix.toFixed(1)} > ${maxVix}`);
       if (!gapPass) gateReasons.push(`gap-open ${gapPct.toFixed(1)}%`);
-      if (!orbPass) gateReasons.push(`opening range forming (${intradayCandles.length}/6 candles)`);
+      if (!orbPass) gateReasons.push("opening range still forming (before 09:45)");
       if (spreadBps > config.maxSpreadBps) gateReasons.push(`spread ${spreadBps.toFixed(1)} bps`);
       if (quote.ltp > config.capital * 0.98) gateReasons.push("price above capital cap");
       if (sizing.quantity <= 0) gateReasons.push("size below 1 share");

@@ -167,7 +167,7 @@ test("opening-range strategy is gated until the range completes", () => {
   const infy = signals.find((signal) => signal.symbol === "INFY");
   strictEqual(infy.eligible, false);
   ok(
-    infy.gateReasons.some((reason) => reason.startsWith("opening range forming")),
+    infy.gateReasons.some((reason) => reason.includes("opening range still forming")),
     infy.gateReasons.join(", ")
   );
   strictEqual(infy.strategyScore, 0, "ORB candidates must score zero before the range completes");
