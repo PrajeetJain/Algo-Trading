@@ -461,7 +461,9 @@ function App() {
     let active = true;
     async function loadCandles() {
       try {
-        const response = await fetch(`/api/market/candles?symbol=${encodeURIComponent(chartSymbol ?? "")}&interval=5minute&days=1`);
+        // days=4 so the window always spans the prior trading day even across
+        // weekends/holidays (days=1 returns nothing on a Monday pre-open).
+        const response = await fetch(`/api/market/candles?symbol=${encodeURIComponent(chartSymbol ?? "")}&interval=5minute&days=4`);
         if (!response.ok) {
           throw new Error("candles unavailable");
         }

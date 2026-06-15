@@ -86,7 +86,7 @@ export function CandleChart({ payload, position }: { payload: CandlePayload; pos
   }, [candles, position]);
 
   if (!geometry) {
-    return <div className="journal-empty">No candles yet — connect Zerodha for live data</div>;
+    return <div className="journal-empty">No candles yet — waiting for the next 5-minute bar</div>;
   }
 
   const { step, yFor } = geometry;
